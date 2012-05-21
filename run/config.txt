@@ -1,0 +1,10 @@
+#current password
+
+#database dir path
+/workdir/jarekp/
+#database file path
+hdf5serverroot.h5
+#temp directory
+/home_loc/samba
+#communication mode: std (stdout/stdin), _name (named pipe with name 'name')
+std
