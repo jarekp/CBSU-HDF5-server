@@ -16,11 +16,11 @@
 #include <unistd.h>
 #include <signal.h>
 
-#define MAXLINE 5000
+#define MAXLINE 5000000
 
 #define INSTALLDIR "/usr/local/hdf5"
 
-char prtbuf[50000];
+char prtbuf[MAXLINE];
 char prtbuf1[500];
 char lockfile[1000];
 char hdf5dir[256], hdf5conf[256], tmpdir[256], hdf5root[512];
@@ -128,7 +128,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "ERROR: Cannot open log file %s\n", prtbuf);
         exit(1);
     }
-    
+
     remote_host = getenv("REMOTE_HOST");
     sprintf(prtbuf, "%s/config.txt", hdf5conf);
     //read config file first
@@ -153,14 +153,14 @@ int main(int argc, char** argv)
         chomp(command);
         fclose(in);
         sprintf(lockfile, "%s/hdf5.lock", hdf5dir);
-        
+
         //check if the server is alive
         sprintf(prtbuf, "%s/cbsuhdf5.pid", hdf5conf);
         int restart = 0;
         char pid[40];
         if ((in = fopen(prtbuf, "r")) != NULL)
         {
-            if(fgets(pid, 39, in))
+            if (fgets(pid, 39, in))
             {
                 chomp(pid);
                 sprintf(prtbuf, "/proc/%s/cmdline", pid);
@@ -179,18 +179,18 @@ int main(int argc, char** argv)
             {
                 fclose(in);
                 restart = 1;
-            }            
+            }
         }
         else
         {
             restart = 1;
         }
-        if(restart == 1)
+        if (restart == 1)
         {
             logmsg("restarting hdf5 demon!\n");
-            sprintf(prtbuf, "rm -f %s/cbsuhdf5.pid %s/cbsuhdf5.pid1", hdf5conf, hdf5conf);
+            sprintf(prtbuf, "rm -f %s/cbsuhdf5.pid %s/cbsuhdf5.pid1 1> /dev/null 2> /dev/null", hdf5conf, hdf5conf);
             int jk = system(prtbuf);
-            sprintf(prtbuf, "%s/cbsuhdf5d start", hdf5conf);
+            sprintf(prtbuf, "%s/cbsuhdf5d start 1> /dev/null 2> /dev/null", hdf5conf);
             jk = system(prtbuf);
             logmsg(" .. done\n");
         }
@@ -228,25 +228,40 @@ int main(int argc, char** argv)
     }
     //first get the input and store it in memory
     nc = 0;
+    char cmd[50];
     while (1)
     {
-        int i=0;
+        int i = 0;
         while (1)
         {
             char c = fgetc(stdin);
-            if(c!=13)
+            if (c != 13)
             {
                 prtbuf[i] = c;
                 i++;
             }
-            if(c==10)
+            if (c == 10)
             {
                 prtbuf[i] = '\0';
                 break;
             }
         }
         //fprintf(stdout, "==%s==", prtbuf);
-        if (prtbuf[0] == '\n')break;
+        if (prtbuf[0] == '\n')
+        {
+            if (strcmp(cmd, "QUERY\n") == 0 && (nc == 5 || nc == 9))
+            {
+                //ignore
+            }
+            else if (strcmp(cmd, "TABLE\n") == 0 && nc == 5)
+            {
+                //ignore
+            }
+            else
+            {
+                break;
+            }
+        }
         if (nc == 0)
         {
             cqueue = malloc(sizeof (char *));
@@ -260,6 +275,10 @@ int main(int argc, char** argv)
         cqueue[nc] = malloc(strlen(prtbuf) + 1);
         if (cqueue[nc] == NULL)error("Cannot allocate memory (3)\n", "Service memory error 3");
         strcpy(cqueue[nc], prtbuf);
+        if (nc == 0)
+        {
+            strcpy(cmd, prtbuf);
+        }
         nc++;
     }
     //get a lock on the server and push in the input
@@ -280,6 +299,7 @@ int main(int argc, char** argv)
     }
     sprintf(buf, "lock established (%d)\n", ii);
     logmsg(buf);
+    logmsg(buf);
     //push the input to the server
     for (ii = 0; ii < nc; ii++)
     {
@@ -293,7 +313,7 @@ int main(int argc, char** argv)
     //transmit output to the client
     while (1)
     {
-        fgets(prtbuf, 49999, outs);
+        fgets(prtbuf, MAXLINE - 1, outs);
         fprintf(stdout, "%s", prtbuf);
         fflush(stdout);
         if (strcmp(prtbuf, "Command COMPLETED\n") == 0)break;

@@ -85,6 +85,8 @@ char hdf5dir[500];
 char hdf5conf[500];
 char prtbuf[5000];
 char errbuf[5000];
+char *outsbuffer;
+int delayed;
 FILE *flog;
 FILE *outs;
 FILE *ins;
@@ -104,8 +106,8 @@ userdata_type *users;
 char **accesstable; //same order as users: '\npname1\npname2\npname3\n'
 
 
-int query(), mount(), umount(), pinfo(), plist(), flist(), finfo(), cache(), quit(), sort(), table(), useradd(), userdel(), userpass(), useracc(), aflist();
-int read_access_table(), write_access_table(), umount1(), delproject();
+int query(), mount(), umount(), pinfo(), plist(), flist(), finfo(), cache(), quit(), sort(), table(), useradd(), userdel(), userpass(), useracc(), aflist(), ulist(), login();
+int read_access_table(), write_access_table(), umount1(), delproject(), printtable();
 void freestrtable();
 
 void shutdown();
@@ -119,9 +121,37 @@ void chomp(char *inp)
 void printout(char *txt)
 {
     fprintf(flog, "%s", txt);
-    fprintf(outs, "%s", txt);
     fflush(flog);
-    fflush(outs);
+    if (delayed == 0)
+    {
+        fprintf(outs, "%s", txt);
+        fflush(outs);
+    }
+    else
+    {
+        if (outsbuffer == NULL)
+        {
+            outsbuffer = malloc(strlen(txt) + 1);
+            sprintf(outsbuffer, "%s", txt);
+        }
+        else
+        {
+            unsigned int pos = strlen(outsbuffer);
+            outsbuffer = realloc(outsbuffer, pos + strlen(txt) + 1);
+            strcat(outsbuffer, txt);
+        }
+    }
+}
+
+void printoutbuf()
+{
+    if (outsbuffer != NULL)
+    {
+        fprintf(outs, "%s", outsbuffer);
+        fflush(outs);
+        free(outsbuffer);
+        outsbuffer = NULL;
+    }
 }
 
 void error(char *msg, int line)
@@ -147,10 +177,13 @@ int readline(char *buf, int size, int line, int chmp)
     }
     if (buf[0] == '\n' && chmp != -1)
     {
-        printout("end of input - executing\n");
+        fprintf(outs, "end of input - executing\n");
+        fprintf(flog, "end of input - executing\n");
         tt = time(NULL);
-        sprintf(prtbuf, "START %s", asctime(localtime(&tt)));
-        printout(prtbuf);
+        fprintf(outs, "START %s", asctime(localtime(&tt)));
+        fprintf(flog, "START %s", asctime(localtime(&tt)));
+        fflush(flog);
+        fflush(outs);
         gettimeofday(&c_start, NULL);
         return -1;
     }
@@ -306,7 +339,10 @@ int read_chrinfo(hid_t project, int mnt, int prj, int test, int prt, int order)
     {
         n++;
         sprintf(buf, "chr%d", n);
-        if (!H5Lexists(project, buf, H5P_DEFAULT))break;
+        if (!H5Lexists(project, buf, H5P_DEFAULT))
+        {
+            break;
+        }
         chromosome = H5Gopen(project, buf, H5P_DEFAULT);
         if (order == 1 || order == 3)
         {
@@ -357,14 +393,6 @@ int read_chrinfo(hid_t project, int mnt, int prj, int test, int prt, int order)
             printout(buf);
             return -1;
         }
-        if (!H5Lexists(chromosome, "markers_sv", H5P_DEFAULT) || !H5Lexists(chromosome, "markers_si", H5P_DEFAULT))
-        {
-            if (prt == 1)
-            {
-                sprintf(buf, "WARNING: 'markers' table of chr %d is not indexed - text searches are disabled\n", n);
-                printout(buf);
-            }
-        }
         filespace = H5Dget_space(dataset);
         ret = H5Sget_simple_extent_dims(filespace, dimss, NULL);
         positionsdim = dimss[0];
@@ -388,10 +416,26 @@ int read_chrinfo(hid_t project, int mnt, int prj, int test, int prt, int order)
                 return -1;
             }
         }
-        dataset = H5Dopen(chromosome, "markers", H5P_DEFAULT);
+        if (!H5Lexists(chromosome, "markers", H5P_DEFAULT))
+        {
+            sprintf(buf, "Cannot open dataset 'markers' in chr %d - markers not present (OK, they are optional)\n", n);
+            printout(buf);
+        }
+        else
+        {
+            if (!H5Lexists(chromosome, "markers_sv", H5P_DEFAULT) || !H5Lexists(chromosome, "markers_si", H5P_DEFAULT))
+            {
+                if (prt == 1)
+                {
+                    sprintf(buf, "WARNING: 'markers' table of chr %d is not indexed - text searches are disabled\n", n);
+                    printout(buf);
+                }
+            }
+        }
+        dataset = H5Dopen(chromosome, "alleles", H5P_DEFAULT);
         if (dataset < 0)
         {
-            sprintf(buf, "Cannot open dataset 'markers' in chr %d\n", n);
+            sprintf(buf, "Cannot open dataset 'alleles' in chr %d\n", n);
             printout(buf);
             return -1;
         }
@@ -404,7 +448,7 @@ int read_chrinfo(hid_t project, int mnt, int prj, int test, int prt, int order)
         {
             if (dimspf[1] != markersdim)
             {
-                sprintf(buf, "dimensions of '%s_pf' in prj %d chr %d and markers array don't match (%lli %lli)\n", DATAARRAY, prj, n, dimspf[1], markersdim);
+                sprintf(buf, "dimensions of '%s_pf' in prj %d chr %d and alleles array don't match (%lli %lli)\n", DATAARRAY, prj, n, dimspf[1], markersdim);
                 printout(buf);
                 return -1;
             }
@@ -413,7 +457,7 @@ int read_chrinfo(hid_t project, int mnt, int prj, int test, int prt, int order)
         {
             if (dimstf[0] != markersdim)
             {
-                sprintf(buf, "dimensions of '%s_tf' in prj %d chr %d and markers array don't match (%lli %lli)\n", DATAARRAY, prj, n, dimstf[0], markersdim);
+                sprintf(buf, "dimensions of '%s_tf' in prj %d chr %d and alleles array don't match (%lli %lli)\n", DATAARRAY, prj, n, dimstf[0], markersdim);
                 printout(buf);
                 return -1;
             }
@@ -576,6 +620,20 @@ int check_user_pass(char *name, char *passwd)
     passhash = crypt(passwd, users[n].password);
     if (strcmp(passhash, users[n].password) == 0)return n;
     return -1;
+}
+
+int get_user(char *name)
+{
+    int i, n = -1;
+
+    if (nusers == 0)return -1;
+    for (i = 0; i < nusers; i++)
+    {
+        //sprintf(prtbuf, "%d %s %s\n", i, users[i].username, users[i].password);
+        //printout(prtbuf);
+        if (strcmp(users[i].username, name) == 0)n = i;
+    }
+    return n;
 }
 
 hid_t create_udatatype()
@@ -947,32 +1005,32 @@ void write_root_props(char c, int shrink)
     int rank, rank_chunk;
     if (c == 'F')
     {
-        if(shrink==1)
+        if (shrink == 1)
         {
-                status = H5Ldelete(file, "/files", H5P_DEFAULT);
-                recreate_files();
-                return;
+            status = H5Ldelete(file, "/files", H5P_DEFAULT);
+            recreate_files();
+            return;
         }
         dataset = H5Dopen(file, "/files", H5P_DEFAULT);
     }
     else if (c == 'P')
     {
-        if(shrink==1)
+        if (shrink == 1)
         {
-                status = H5Ldelete(file, "/projects", H5P_DEFAULT);
-                recreate_projects();
-                return;
+            status = H5Ldelete(file, "/projects", H5P_DEFAULT);
+            recreate_projects();
+            return;
         }
         dataset = H5Dopen(file, "/projects", H5P_DEFAULT);
     }
     else if (c == 'U')
     {
-        if(shrink==1)
+        if (shrink == 1)
         {
-                status = H5Ldelete(file, "/users", H5P_DEFAULT);
-                status = H5Ldelete(file, "/access", H5P_DEFAULT);
-                recreate_users();
-                return;
+            status = H5Ldelete(file, "/users", H5P_DEFAULT);
+            status = H5Ldelete(file, "/access", H5P_DEFAULT);
+            recreate_users();
+            return;
         }
         dataset = H5Dopen(file, "/users", H5P_DEFAULT);
     }
@@ -987,9 +1045,9 @@ void write_root_props(char c, int shrink)
     filespace = H5Dget_space(dataset); /* Get filespace handle first. */
     rank = H5Sget_simple_extent_ndims(filespace);
     status_n = H5Sget_simple_extent_dims(filespace, dims, NULL);
-    if(c == 'F')if(dims[0]>nfiles)dims[0] = (hsize_t)nfiles;
-    if(c == 'P')if(dims[0]>nprojects)dims[0] = (hsize_t)nprojects;
-    if(c == 'U')if(dims[0]>nusers)dims[0] = (hsize_t)nusers;
+    if (c == 'F')if (dims[0] > nfiles)dims[0] = (hsize_t) nfiles;
+    if (c == 'P')if (dims[0] > nprojects)dims[0] = (hsize_t) nprojects;
+    if (c == 'U')if (dims[0] > nusers)dims[0] = (hsize_t) nusers;
     cparms = H5Dget_create_plist(dataset); /* Get properties handle first. */
     rank_chunk = H5Pget_chunk(cparms, 1, chunk_dims);
     memspace = H5Screate_simple(1, dims, NULL);
@@ -1082,6 +1140,8 @@ int main(int argc, char** argv)
 
     //read config file first
     sprintf(prtbuf, "%s/config.txt", hdf5conf);
+    delayed = 1;
+    outsbuffer = NULL;
     if ((in = fopen(prtbuf, "r")) != NULL)
     {
         if (!fgets(prtbuf, 4000, in))error("EOF", __LINE__);
@@ -1166,6 +1226,7 @@ int main(int argc, char** argv)
                 }
                 exit(0);
             }
+            delayed = 1;
             //create pid file
             sprintf(prtbuf, "%s/cbsuhdf5.pid1", hdf5conf);
             if ((fptr = fopen(prtbuf, "w")) == NULL)
@@ -1289,6 +1350,14 @@ int main(int argc, char** argv)
     //enter command loop, command ends on empty line
     fprintf(flog, "entering command loop\n\n");
     fflush(flog);
+    if (delayed == 1)
+    {
+        if (outsbuffer != NULL)
+        {
+            free(outsbuffer);
+            outsbuffer = NULL;
+        }
+    }
     while (1)
     {
         errbuf[0] = '\0';
@@ -1345,6 +1414,10 @@ int main(int argc, char** argv)
         {
             iret = cache();
         }
+        else if (strcmp(command, "LOGIN") == 0)
+        {
+            iret = login();
+        }
         else if (strcmp(command, "USERADD") == 0)
         {
             iret = useradd();
@@ -1360,6 +1433,10 @@ int main(int argc, char** argv)
         else if (strcmp(command, "USERACC") == 0)
         {
             iret = useracc();
+        }
+        else if (strcmp(command, "ULIST") == 0)
+        {
+            iret = ulist();
         }
         else if (strcmp(command, "QUIT") == 0)
         {
@@ -1378,6 +1455,9 @@ int main(int argc, char** argv)
         if (errbuf[0] != '\0')printout(errbuf);
         gettimeofday(&c_end, NULL);
         if (iret == 0 && errbuf[0] != '\0')printout(errbuf);
+        if (delayed == 1)printoutbuf();
+        int delayed1 = delayed;
+        delayed = 0;
         ttt = time(NULL);
         sprintf(prtbuf, "END %s", asctime(localtime(&ttt)));
         printout(prtbuf);
@@ -1400,6 +1480,7 @@ int main(int argc, char** argv)
         sprintf(prtbuf, "total     %10.3lf seconds\n", etime);
         printout(prtbuf);
         printout("Command COMPLETED\n");
+        delayed = delayed1;
     }
     ttt = time(NULL);
     fprintf(flog, "Exiting %s\n", asctime(localtime(&ttt)));
@@ -1790,7 +1871,7 @@ int binsearch_str(hid_t obj, char *tblname, char *value, long unsigned int *pp)
     return 1;
 }
 
-int binsearch_int(hid_t obj, char *tblname, char *value, long unsigned int *pp)
+int binsearch_int(hid_t obj, char *tblname, char *value, long unsigned int *pp, int round)
 {
     hid_t dataspace, dataset, datatype;
     long unsigned int i1, i2, ii;
@@ -1852,7 +1933,30 @@ int binsearch_int(hid_t obj, char *tblname, char *value, long unsigned int *pp)
         nn++;
         //fprintf(flog, "%d == %li %d %li %d iter %d\n", val, i1, v1, i2, v2, nn);
         //fflush(flog);
-        if (i1 + 1 == i2 || nn > ITERLIMIT)
+        if (i1 + 1 == i2)
+        {
+            if (round == -1)
+            {
+                sprintf(prtbuf, "Cannot find value %s in dataset '%s' in %d iterations\n", value, tblname, nn - 1);
+                printout(prtbuf);
+                H5Dclose(dataset);
+                H5Sclose(dataspace);
+                return -1;
+            }
+            else
+            {
+                *pp = i2;
+                if (round == 0)*pp = i1;
+                //fprintf(flog, "== INDEX %lu\n", ii);
+                //fflush(flog);
+                H5Dclose(dataset);
+                H5Sclose(dataspace);
+                //fprintf(flog, "== binsearch_int INDEX %lu iter %d ROUNDED %d\n", *pp, nn, round);
+                //fflush(flog);
+                return 1;
+            }
+        }
+        if (nn > ITERLIMIT)
         {
             sprintf(prtbuf, "Cannot find value %s in dataset '%s' in %d iterations\n", value, tblname, nn - 1);
             printout(prtbuf);
@@ -1878,8 +1982,8 @@ int binsearch_int(hid_t obj, char *tblname, char *value, long unsigned int *pp)
             //fflush(flog);
             H5Dclose(dataset);
             H5Sclose(dataspace);
-            fprintf(flog, "== binsearch_int INDEX %lu iter %d\n", ii, nn);
-            fflush(flog);
+            //fprintf(flog, "== binsearch_int INDEX %lu iter %d\n", ii, nn);
+            //fflush(flog);
             return 1;
         }
         if (vv < val)
@@ -1898,12 +2002,14 @@ int binsearch_int(hid_t obj, char *tblname, char *value, long unsigned int *pp)
     return -1;
 }
 
-int convert_position(char *buf, hid_t chrm, long unsigned int *pp, int i, char *valuetype)
+int convert_position(char *buf, hid_t chrm, long unsigned int *pp, int i, char *valuetype, char *rangetype)
 {
     //find indexes if necessary
     if (strcmp(valuetype, "positions") == 0)
     {
-        return binsearch_int(chrm, "positions", buf, &pp[i]);
+        int round = -1;
+        if (strcmp(rangetype, "range") == 0)round = 1 - i;
+        return binsearch_int(chrm, "positions", buf, &pp[i], round);
     }
     else if (strcmp(valuetype, "markers") == 0)
     {
@@ -1942,33 +2048,35 @@ int convert_taxa(char *buf, hid_t prj, long unsigned int *pp, int i, char *value
     return 1;
 }
 
-void printdata(int prj, char *data, int iformat, int ntt, int npp, FILE *outf, int pstride, int tstride, int header, char *outfile)
+void printdata(int prj, char *data, int iformat, int ntt, int npp, FILE *outf, int pstride, int tstride, int order)
 {
     int ii, jj;
 
-    //output data
-    if (header == 1)
-    {
-        fprintf(outs, "encoding = %s\n", projects[prj].encoding);
-        fprintf(outs, "data element size %d bytes\n", projects[prj].enc);
-        if (outfile[0] != '\0')fprintf(outs, "%s\n", outfile);
-    }
     int enc = projects[prj].enc;
     int npps = npp / pstride;
     int ntts = ntt / tstride;
-    for (ii = 0; ii < npps; ii++)
+    int loop1 = npps;
+    int loop2 = ntts;
+    if (order == 2)
     {
-        for (jj = 0; jj < ntts; jj++)
+        loop1 = ntts;
+        loop2 = npps;
+    }
+
+    for (ii = 0; ii < loop2; ii++)
+    {
+        for (jj = 0; jj < loop1; jj++)
         {
             int offs;
-            if (projects[prj].order == 2)
-            {
-                offs = ii * ntts + jj;
-            }
-            else
-            {
-                offs = jj * npps + ii;
-            }
+            //if (projects[prj].order == 2)
+            //{
+            //    offs = ii * ntts + jj;
+            //}
+            //else
+            //{
+            //    offs = jj * npps + ii;
+            //}
+            offs = jj + ii * loop1;
             if (enc == 1)
             {
                 char c = data[offs];
@@ -2015,18 +2123,27 @@ int readdata(hid_t dataset, hid_t dataspace, hid_t datatype, int prj, char *data
     stridecount[0] = 1;
     stridecount[1] = 1;
 
+    int ntts = ntt / tstride;
+    if (ntts * tstride != ntt)ntts++;
+    int nts = nt / tstride;
+    if (nts * tstride != nt)nts++;
+    int npps = npp / pstride;
+    if (npps * pstride != npp)npps++;
+    int nps = np / pstride;
+    if (nps * pstride != np)nps++;
+
     if (order == 1)
     {
         offset[0] = toff;
         offset[1] = poff;
         count[0] = ntt;
         count[1] = npp;
-        memcount[0] = ntt / tstride;
-        memcount[1] = npp / pstride;
+        memcount[0] = ntts;
+        memcount[1] = npps;
         memoffset[0] = tmoff;
         memoffset[1] = pmoff;
-        memdim[0] = nt / tstride;
-        memdim[1] = np / pstride;
+        memdim[0] = nts;
+        memdim[1] = nps;
         stride[0] = tstride;
         stride[1] = pstride;
     }
@@ -2036,12 +2153,12 @@ int readdata(hid_t dataset, hid_t dataspace, hid_t datatype, int prj, char *data
         offset[0] = poff;
         count[1] = ntt;
         count[0] = npp;
-        memcount[1] = ntt / tstride;
-        memcount[0] = npp / pstride;
+        memcount[1] = ntts;
+        memcount[0] = npps;
         memoffset[1] = tmoff;
         memoffset[0] = pmoff;
-        memdim[1] = nt / tstride;
-        memdim[0] = np / pstride;
+        memdim[1] = nts;
+        memdim[0] = nps;
         stride[1] = tstride;
         stride[0] = pstride;
     }
@@ -2093,11 +2210,11 @@ int query()
     char buf[1001], pvaluetype[20], tvaluetype[20], trangetype[20], prangetype[20], name[256], chrname[20], dest[10], format[10];
     char outfile[256], orientation[10], datarr[20], username[50], userpass[50];
     int iprange, itrange, ii, iformat, order, pstride, tstride, uid = -1;
-    char *data;
+    char *data = NULL;
     FILE *outf = NULL;
     long unsigned int np, *pp, *tt, nt, i;
     int prj, chr;
-    hid_t project, chromosome, dataset, dataspace, datatype;
+    hid_t project, chromosome, dataset = -1, dataspace = -1, datatype = -1;
 
     if (readline(username, 50, __LINE__, 1) < 0)return -1;
     if (readline(userpass, 50, __LINE__, 0) < 0)return -1;
@@ -2223,7 +2340,7 @@ int query()
     iformat = 0;
     if (strcmp(format, "num") == 0)iformat = 1;
     if (readline(orientation, 9, __LINE__, 1) < 0)return -1;
-    if (strcmp(orientation, "auto") != 0 && strcmp(orientation, "pf") != 0 && strcmp(orientation, "tf") != 0)
+    if (strcmp(orientation, "auto") != 0 && strcmp(orientation, "pf") != 0 && strcmp(orientation, "tf") != 0 && strcmp(orientation, "nodata") != 0)
     {
         sprintf(errbuf, "Invalid orientation '%s' requested\n", orientation);
         gotoend();
@@ -2288,7 +2405,7 @@ int query()
         for (i = 0; i < np; i++)
         {
             if (readline(buf, 256, __LINE__, 1) < 0)return -1;
-            if (convert_position(buf, chromosome, pp, i, pvaluetype) < 0)
+            if (convert_position(buf, chromosome, pp, i, pvaluetype, prangetype) < 0)
             {
                 printout("cannot convert position to index\n");
                 gotoend();
@@ -2366,9 +2483,15 @@ int query()
         return -1;
     }
 
+    int nodata = 0;
+    if (strcmp(orientation, "nodata") == 0)
+    {
+        nodata = 1;
+    }
+
     if (projects[prj].order == 3)
     {
-        if (strcmp(orientation, "auto"))
+        if (strcmp(orientation, "auto") == 0)
         {
             if (iprange == 1 || iprange == 2)
             {
@@ -2400,7 +2523,7 @@ int query()
                 }
             }
         }
-        else if (strcmp(orientation, "pf"))
+        else if (strcmp(orientation, "pf") == 0)
         {
             order = 1;
         }
@@ -2422,43 +2545,6 @@ int query()
         sprintf(datarr, "%s_tf", DATAARRAY);
     }
 
-    dataset = H5Dopen(chromosome, datarr, H5P_DEFAULT);
-    if (dataset < 0)
-    {
-        sprintf(prtbuf, "Cannot open dataset '%s'\n", datarr);
-        printout(prtbuf);
-        free(pp);
-        free(tt);
-        H5Gclose(project);
-        H5Gclose(chromosome);
-        return 0;
-    }
-    dataspace = H5Dget_space(dataset);
-    if (dataspace < 0)
-    {
-        sprintf(buf, "Cannot open dataspace in dataset '%s'\n", datarr);
-        printout(buf);
-        free(pp);
-        free(tt);
-        H5Gclose(project);
-        H5Gclose(chromosome);
-        H5Dclose(dataset);
-        return 0;
-    }
-    datatype = H5Dget_type(dataset);
-    if (datatype < 0)
-    {
-        sprintf(buf, "Cannot get datatype of dataset '%s'\n", datarr);
-        free(pp);
-        free(tt);
-        H5Gclose(project);
-        H5Gclose(chromosome);
-        H5Dclose(dataset);
-        H5Sclose(dataspace);
-        printout(buf);
-        return 0;
-    }
-    //allocate memory
     outf = outs;
     outfile[0] = '\0';
     if (strcmp(dest, "file") == 0)
@@ -2476,13 +2562,68 @@ int query()
             free(tt);
             H5Gclose(project);
             H5Gclose(chromosome);
-            H5Dclose(dataset);
-            H5Tclose(datatype);
-            H5Sclose(dataspace);
             return 0;
         }
         //fprintf(outs, "%s\n", outfile);
     }
+
+    //output data start
+    if (outfile[0] != '\0')
+    {
+        sprintf(prtbuf, "%s\n", outfile);
+        printout(prtbuf);
+    }
+    fprintf(outf, "encoding = %s\n", projects[prj].encoding);
+    fprintf(outf, "data element size %d bytes\n", projects[prj].enc);
+    if (order == 1)
+    {
+        fprintf(outf, "orientation = pf\n");
+    }
+    else
+    {
+        fprintf(outf, "orientation = tf\n");
+    }
+
+    if (nodata == 0)
+    {
+        dataset = H5Dopen(chromosome, datarr, H5P_DEFAULT);
+        if (dataset < 0)
+        {
+            sprintf(buf, "Cannot open dataset '%s'\n", datarr);
+            printout(buf);
+            free(pp);
+            free(tt);
+            H5Gclose(project);
+            H5Gclose(chromosome);
+            return 0;
+        }
+        dataspace = H5Dget_space(dataset);
+        if (dataspace < 0)
+        {
+            sprintf(buf, "Cannot open dataspace in dataset '%s'\n", datarr);
+            printout(buf);
+            free(pp);
+            free(tt);
+            H5Gclose(project);
+            H5Gclose(chromosome);
+            H5Dclose(dataset);
+            return 0;
+        }
+        datatype = H5Dget_type(dataset);
+        if (datatype < 0)
+        {
+            sprintf(buf, "Cannot get datatype of dataset '%s'\n", datarr);
+            free(pp);
+            free(tt);
+            H5Gclose(project);
+            H5Gclose(chromosome);
+            H5Dclose(dataset);
+            H5Sclose(dataspace);
+            printout(buf);
+            return 0;
+        }
+    }
+
     if (iprange == 1 || iprange == 2)
     {
         if (itrange == 1 || itrange == 2)
@@ -2492,54 +2633,24 @@ int query()
             int ntt = tt[1] - tt[0] + 1;
             int npps = npp / pstride;
             int ntts = ntt / tstride;
-            data = malloc(npps * ntts * projects[prj].enc * sizeof (char));
-            if (data == NULL)
-            {
-                sprintf(buf, "Cannot allocate %li bytes of memory [range-range]\n", ntt * npp * projects[prj].enc * sizeof (char));
-                printout(buf);
-                free(pp);
-                free(tt);
-                return 0;
-            }
+            if (npps * pstride != npp)npps++;
+            if (ntts * tstride != ntt)ntts++;
+            fprintf(outf, "positions size = %d\n", npps);
+            fprintf(outf, "taxa size = %d\n", ntts);
 
-            if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, ntt, npp, tt[0], pp[0], 0, 0, order, pstride, tstride) <= 0)
+            if (nodata == 0)
             {
-                free(pp);
-                free(tt);
-                free(data);
-                H5Gclose(project);
-                H5Gclose(chromosome);
-                H5Dclose(dataset);
-                H5Tclose(datatype);
-                H5Sclose(dataspace);
-                return 0;
-            }
-            printdata(prj, data, iformat, ntt, npp, outf, pstride, tstride, 1, outfile);
-        }
-        else
-        {
-            //range-list
-            int npp = pp[1] - pp[0] + 1;
-            int npps = npp / pstride;
-            int ntt = 1;
-            data = malloc(npps * nt * projects[prj].enc * sizeof (char));
-            if (data == NULL)
-            {
-                sprintf(buf, "Cannot allocate %li bytes of memory [range-list]\n", ntt * npp * projects[prj].enc * sizeof (char));
-                printout(buf);
-                H5Gclose(project);
-                H5Gclose(chromosome);
-                H5Dclose(dataset);
-                H5Tclose(datatype);
-                H5Sclose(dataspace);
-                free(pp);
-                free(tt);
-                return 0;
-            }
+                data = malloc(npps * ntts * projects[prj].enc * sizeof (char));
+                if (data == NULL)
+                {
+                    sprintf(buf, "Cannot allocate %li bytes of memory [range-range]\n", ntt * npp * projects[prj].enc * sizeof (char));
+                    printout(buf);
+                    free(pp);
+                    free(tt);
+                    return 0;
+                }
 
-            for (ii = 0; ii < nt; ii++)
-            {
-                if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, nt, npp, tt[ii], pp[0], ii, 0, order, pstride, tstride) <= 0)
+                if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, ntt, npp, tt[0], pp[0], 0, 0, order, pstride, tstride) <= 0)
                 {
                     free(pp);
                     free(tt);
@@ -2551,8 +2662,62 @@ int query()
                     H5Sclose(dataspace);
                     return 0;
                 }
+                printdata(prj, data, iformat, ntt, npp, outf, pstride, tstride, order);
             }
-            printdata(prj, data, iformat, nt, npp, outf, pstride, tstride, 1, outfile);
+            printtable("positions", chrname, project, pp[0], pp[1], prj, pstride, outf);
+            printtable("alleles", chrname, project, pp[0], pp[1], prj, pstride, outf);
+            printtable("taxa", chrname, project, tt[0], tt[1], prj, tstride, outf);
+            printtable("markers", chrname, project, pp[0], pp[1], prj, pstride, outf);
+        }
+        else
+        {
+            //range-list
+            int npp = pp[1] - pp[0] + 1;
+            int npps = npp / pstride;
+            if (npps * pstride != npp)npps++;
+            int ntt = 1;
+            fprintf(outf, "positions size = %i\n", npps);
+            fprintf(outf, "taxa size = %li\n", nt);
+
+            if (nodata == 0)
+            {
+                data = malloc(npps * nt * projects[prj].enc * sizeof (char));
+                if (data == NULL)
+                {
+                    sprintf(buf, "Cannot allocate %li bytes of memory [range-list]\n", ntt * npp * projects[prj].enc * sizeof (char));
+                    printout(buf);
+                    H5Gclose(project);
+                    H5Gclose(chromosome);
+                    H5Dclose(dataset);
+                    H5Tclose(datatype);
+                    H5Sclose(dataspace);
+                    free(pp);
+                    free(tt);
+                    return 0;
+                }
+
+                for (ii = 0; ii < nt; ii++)
+                {
+                    if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, nt, npp, tt[ii], pp[0], ii, 0, order, pstride, tstride) <= 0)
+                    {
+                        free(pp);
+                        free(tt);
+                        free(data);
+                        H5Gclose(project);
+                        H5Gclose(chromosome);
+                        H5Dclose(dataset);
+                        H5Tclose(datatype);
+                        H5Sclose(dataspace);
+                        return 0;
+                    }
+                }
+                printdata(prj, data, iformat, nt, npp, outf, pstride, tstride, order);
+            }
+            printtable("positions", chrname, project, pp[0], pp[1], prj, pstride, outf);
+            printtable("alleles", chrname, project, pp[0], pp[1], prj, pstride, outf);
+            for (ii = 0; ii < nt; ii++)
+                printtable("taxa", chrname, project, tt[ii], tt[ii], prj, 1, outf);
+            printtable("markers", chrname, project, pp[0], pp[1], prj, pstride, outf);
         }
     }
     else
@@ -2563,36 +2728,50 @@ int query()
             int npp = 1;
             int ntt = tt[1] - tt[0] + 1;
             int ntts = ntt / tstride;
-            data = malloc(np * ntts * projects[prj].enc * sizeof (char));
-            if (data == NULL)
+            if (ntts * tstride != ntt)ntts++;
+            fprintf(outf, "positions size = %li\n", np);
+            fprintf(outf, "taxa size = %i\n", ntts);
+
+            if (nodata == 0)
             {
-                sprintf(buf, "Cannot allocate %li bytes of memory [list-range]\n", npp * ntt * projects[prj].enc * sizeof (char));
-                printout(buf);
-                H5Gclose(project);
-                H5Gclose(chromosome);
-                H5Dclose(dataset);
-                H5Tclose(datatype);
-                H5Sclose(dataspace);
-                free(pp);
-                free(tt);
-                return 0;
-            }
-            for (ii = 0; ii < np; ii++)
-            {
-                if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, ntt, np, tt[0], pp[ii], 0, ii, order, pstride, tstride) <= 0)
+                data = malloc(np * ntts * projects[prj].enc * sizeof (char));
+                if (data == NULL)
                 {
-                    free(pp);
-                    free(tt);
-                    free(data);
+                    sprintf(buf, "Cannot allocate %li bytes of memory [list-range]\n", npp * ntt * projects[prj].enc * sizeof (char));
+                    printout(buf);
                     H5Gclose(project);
                     H5Gclose(chromosome);
                     H5Dclose(dataset);
                     H5Tclose(datatype);
                     H5Sclose(dataspace);
+                    free(pp);
+                    free(tt);
                     return 0;
                 }
+                for (ii = 0; ii < np; ii++)
+                {
+                    if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, ntt, np, tt[0], pp[ii], 0, ii, order, pstride, tstride) <= 0)
+                    {
+                        free(pp);
+                        free(tt);
+                        free(data);
+                        H5Gclose(project);
+                        H5Gclose(chromosome);
+                        H5Dclose(dataset);
+                        H5Tclose(datatype);
+                        H5Sclose(dataspace);
+                        return 0;
+                    }
+                }
+                printdata(prj, data, iformat, ntt, np, outf, pstride, tstride, order);
             }
-            printdata(prj, data, iformat, ntt, np, outf, pstride, tstride, 1, outfile);
+            for (ii = 0; ii < np; ii++)
+                printtable("positions", chrname, project, pp[ii], pp[ii], prj, 1, outf);
+            for (ii = 0; ii < np; ii++)
+                printtable("alleles", chrname, project, pp[ii], pp[ii], prj, 1, outf);
+            printtable("taxa", chrname, project, tt[0], tt[1], prj, tstride, outf);
+            for (ii = 0; ii < np; ii++)
+                printtable("markers", chrname, project, pp[ii], pp[ii], prj, 1, outf);
         }
         else
         {
@@ -2612,25 +2791,16 @@ int query()
             }
             int npp = 1;
             int ntt = 1;
-            data = malloc(projects[prj].enc * sizeof (char));
-            if (data == NULL)
+            fprintf(outf, "positions size = %li\n", np);
+            fprintf(outf, "taxa size = %li\n", nt);
+
+            if (nodata == 0)
             {
-                sprintf(buf, "Cannot allocate %li bytes of memory [list-list]\n", projects[prj].enc * sizeof (char));
-                printout(buf);
-                H5Gclose(project);
-                H5Gclose(chromosome);
-                H5Dclose(dataset);
-                H5Tclose(datatype);
-                H5Sclose(dataspace);
-                free(pp);
-                free(tt);
-                return 0;
-            }
-            int kk = 1;
-            for (ii = 0; ii < nt; ii++)
-            {
-                if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, ntt, npp, tt[ii], pp[ii], 0, 0, order, pstride, tstride) <= 0)
+                data = malloc(projects[prj].enc * sizeof (char));
+                if (data == NULL)
                 {
+                    sprintf(buf, "Cannot allocate %li bytes of memory [list-list]\n", projects[prj].enc * sizeof (char));
+                    printout(buf);
                     H5Gclose(project);
                     H5Gclose(chromosome);
                     H5Dclose(dataset);
@@ -2638,12 +2808,35 @@ int query()
                     H5Sclose(dataspace);
                     free(pp);
                     free(tt);
-                    free(data);
                     return 0;
                 }
-                printdata(prj, data, iformat, ntt, npp, outf, pstride, tstride, kk, outfile);
-                kk++;
+                int kk = 1;
+                for (ii = 0; ii < nt; ii++)
+                {
+                    if (readdata(dataset, dataspace, datatype, prj, data, ntt, npp, ntt, npp, tt[ii], pp[ii], 0, 0, order, pstride, tstride) <= 0)
+                    {
+                        H5Gclose(project);
+                        H5Gclose(chromosome);
+                        H5Dclose(dataset);
+                        H5Tclose(datatype);
+                        H5Sclose(dataspace);
+                        free(pp);
+                        free(tt);
+                        free(data);
+                        return 0;
+                    }
+                    printdata(prj, data, iformat, ntt, npp, outf, pstride, tstride, order);
+                    kk++;
+                }
             }
+            for (ii = 0; ii < np; ii++)
+                printtable("positions", chrname, project, pp[ii], pp[ii], prj, 1, outf);
+            for (ii = 0; ii < np; ii++)
+                printtable("alleles", chrname, project, pp[ii], pp[ii], prj, 1, outf);
+            for (ii = 0; ii < nt; ii++)
+                printtable("taxa", chrname, project, tt[ii], tt[ii], prj, 1, outf);
+            for (ii = 0; ii < np; ii++)
+                printtable("markers", chrname, project, pp[ii], pp[ii], prj, 1, outf);
         }
     }
     //free memory
@@ -2652,9 +2845,14 @@ int query()
     free(data);
     H5Gclose(project);
     H5Gclose(chromosome);
-    H5Dclose(dataset);
-    H5Tclose(datatype);
-    H5Sclose(dataspace);
+    if (nodata == 0)
+    {
+        H5Dclose(dataset);
+        H5Tclose(datatype);
+        H5Sclose(dataspace);
+    }
+
+
     if (strcmp(dest, "file") == 0)fclose(outf);
     return 1;
 }
@@ -3362,37 +3560,40 @@ int sort()
                 sprintf(prtbuf, "Cannot open %s in file %d\n", buf, nn);
                 return 0;
             }
-            if (verifyorcreate(chromosome, "markers", &mcount) == -1)
+            if (H5Lexists(chromosome, "markers", H5P_DEFAULT))
             {
-                H5Gclose(chromosome);
-                return -1;
-            }
-            if (readstrtable(&sortstrtable, &strtable, chromosome, "markers", mcount) == -1)
-            {
-                H5Gclose(chromosome);
-                return -1;
-            }
-            //sort it
-            if (dosortstrtable(strtable, sortstrtable, &inttable, mcount) == -1)
-            {
-                H5Gclose(chromosome);
-                free(sortstrtable);
-                freestrtable(strtable, mcount);
-                return -1;
-            }
-            //write back sorted values to file
-            if (writetables(strtable, inttable, chromosome, "markers", mcount) == -1)
-            {
-                H5Gclose(chromosome);
+                if (verifyorcreate(chromosome, "markers", &mcount) == -1)
+                {
+                    H5Gclose(chromosome);
+                    return -1;
+                }
+                if (readstrtable(&sortstrtable, &strtable, chromosome, "markers", mcount) == -1)
+                {
+                    H5Gclose(chromosome);
+                    return -1;
+                }
+                //sort it
+                if (dosortstrtable(strtable, sortstrtable, &inttable, mcount) == -1)
+                {
+                    H5Gclose(chromosome);
+                    free(sortstrtable);
+                    freestrtable(strtable, mcount);
+                    return -1;
+                }
+                //write back sorted values to file
+                if (writetables(strtable, inttable, chromosome, "markers", mcount) == -1)
+                {
+                    H5Gclose(chromosome);
+                    free(inttable);
+                    free(sortstrtable);
+                    freestrtable(strtable, mcount);
+                    return -1;
+                }
                 free(inttable);
                 free(sortstrtable);
                 freestrtable(strtable, mcount);
-                return -1;
             }
             H5Gclose(chromosome);
-            free(inttable);
-            free(sortstrtable);
-            freestrtable(strtable, mcount);
         }
     }
 
@@ -3423,14 +3624,10 @@ int sort()
 int table()
 {
     char buf[1001], name[256], projectname[100], chrname[100], username[50], userpass[50];
-    hid_t dataset, datatype, project, dataspace;
-    hsize_t icount, ioff, dims[2];
-    int i, prj, chr, uid = -1;
+    hid_t project;
     unsigned int n0, n1;
     char buf1[257];
-    int *valint;
-    char **valstr;
-    herr_t ret;
+    int uid = -1, prj;
 
     if (readline(username, 50, __LINE__, 1) < 0)return -1;
     if (readline(userpass, 50, __LINE__, 0) < 0)return -1;
@@ -3479,8 +3676,7 @@ int table()
         printout("Invalid ending index\n");
         return -1;
     }
-    icount = (hsize_t) (n1 - n0 + 1);
-    ioff = (hsize_t) n0;
+
     if (readline(buf1, 256, __LINE__, 0) != -1)
     {
         printout("invalid input, expected end-of-command here\n");
@@ -3518,6 +3714,40 @@ int table()
         return 0;
     }
 
+
+    int retcode = printtable(name, chrname, project, n0, n1, prj, 1, outs);
+
+    if (retcode == -1)
+    {
+        H5Gclose(project);
+        sprintf(prtbuf, "Invalid table name '%s'\n", name);
+        printout(prtbuf);
+        return 0;
+    }
+    else
+    {
+        H5Gclose(project);
+        return retcode;
+    }
+
+    return 1;
+}
+
+int printtable(char *name, char *chrname, hid_t project, unsigned int n0, unsigned int n1, int prj, int stride, FILE *outf)
+{
+    char buf[1001];
+    hid_t dataset, datatype, dataspace;
+    hsize_t dims[2], icount, ioff;
+    int i, chr;
+    int *valint;
+    char **valstr;
+    herr_t ret;
+
+    icount = (hsize_t) (n1 - n0 + 1);
+    ioff = (hsize_t) n0;
+
+    //fprintf(outs, "%s %s %d %u %u %d %d\n", name, chrname, project, n0, n1, prj, stride);
+
     if (strcmp(name, "taxa") == 0)
     {
         dataset = H5Dopen(project, name, H5P_DEFAULT);
@@ -3525,7 +3755,6 @@ int table()
         {
             sprintf(prtbuf, "Cannot open dataset '%s'\n", name);
             printout(prtbuf);
-            H5Gclose(project);
             return 0;
         }
         dataspace = H5Dget_space(dataset);
@@ -3533,7 +3762,6 @@ int table()
         {
             sprintf(buf, "Cannot open dataspace in dataset '%s'\n", name);
             printout(buf);
-            H5Gclose(project);
             H5Dclose(dataset);
             return 0;
         }
@@ -3543,7 +3771,6 @@ int table()
         {
             sprintf(buf, "Ending index too large %u, maximum %llu\n", n1, dims[0]);
             printout(buf);
-            H5Gclose(project);
             H5Dclose(dataset);
             H5Sclose(dataspace);
             return 0;
@@ -3552,7 +3779,6 @@ int table()
         if (datatype < 0)
         {
             sprintf(buf, "Cannot get datatype of dataset '%s'\n", name);
-            H5Gclose(project);
             H5Dclose(dataset);
             H5Sclose(dataspace);
             printout(buf);
@@ -3560,27 +3786,24 @@ int table()
         }
         if (read_str(ioff, icount, dataset, datatype, dataspace, &valstr) == -1)
         {
-            H5Gclose(project);
             H5Dclose(dataset);
             H5Sclose(dataspace);
             return -1;
         }
-        for (i = 0; i < (unsigned int) icount; i++)
+        for (i = 0; i < (unsigned int) icount; i += stride)
         {
-            fprintf(outs, "%s\n", valstr[i]);
+            fprintf(outf, "%s\n", valstr[i]);
         }
-        H5Gclose(project);
         H5Dclose(dataset);
         H5Sclose(dataspace);
         freestrtable(valstr, icount);
     }
-    else if (strcmp(name, "positions") == 0 || strcmp(name, "markers") == 0)
+    else if (strcmp(name, "positions") == 0 || strcmp(name, "markers") == 0 || strcmp(name, "alleles") == 0)
     {
         chr = find_chr(chrname, prj);
         if (chr < 0)
         {
             printout("Invalid chromosome name\n");
-            H5Gclose(project);
             return 0;
         }
         sprintf(buf, "chr%d", chrinfo[chr].num);
@@ -3588,15 +3811,22 @@ int table()
         if (chr < 0)
         {
             printout("Cannot open chromosome\n");
-            H5Gclose(project);
             return 0;
         }
+        if (strcmp(name, "markers") == 0)
+        {
+            if (!H5Lexists(chr, name, H5P_DEFAULT))
+            {
+                printout("Cannot open table markers\n");
+                return 0;
+            }
+        }
+
         dataset = H5Dopen(chr, name, H5P_DEFAULT);
         if (dataset < 0)
         {
             sprintf(prtbuf, "Cannot open dataset '%s'\n", name);
             printout(prtbuf);
-            H5Gclose(project);
             H5Gclose(chr);
             return 0;
         }
@@ -3605,7 +3835,6 @@ int table()
         {
             sprintf(buf, "Cannot open dataspace in dataset '%s'\n", name);
             printout(buf);
-            H5Gclose(project);
             H5Gclose(chr);
             H5Dclose(dataset);
             return 0;
@@ -3615,7 +3844,6 @@ int table()
         {
             sprintf(buf, "Ending index too large %u, maximum %llu\n", n1, dims[0]);
             printout(buf);
-            H5Gclose(project);
             H5Gclose(chr);
             H5Dclose(dataset);
             H5Sclose(dataspace);
@@ -3625,7 +3853,6 @@ int table()
         if (datatype < 0)
         {
             sprintf(buf, "Cannot get datatype of dataset '%s'\n", name);
-            H5Gclose(project);
             H5Gclose(chr);
             H5Dclose(dataset);
             H5Sclose(dataspace);
@@ -3636,15 +3863,14 @@ int table()
         {
             if (read_int(ioff, icount, dataset, datatype, dataspace, &valint) == -1)
             {
-                H5Gclose(project);
                 H5Gclose(chr);
                 H5Dclose(dataset);
                 H5Sclose(dataspace);
                 return -1;
             }
-            for (i = 0; i < (unsigned int) icount; i++)
+            for (i = 0; i < (unsigned int) icount; i += stride)
             {
-                fprintf(outs, "%u\n", valint[i]);
+                fprintf(outf, "%u\n", valint[i]);
             }
             free(valint);
         }
@@ -3652,30 +3878,25 @@ int table()
         {
             if (read_str(ioff, icount, dataset, datatype, dataspace, &valstr) == -1)
             {
-                H5Gclose(project);
                 H5Gclose(chr);
                 H5Dclose(dataset);
                 H5Sclose(dataspace);
                 return -1;
             }
-            for (i = 0; i < (unsigned int) icount; i++)
+            for (i = 0; i < (unsigned int) icount; i += stride)
             {
-                fprintf(outs, "%s\n", valstr[i]);
+                fprintf(outf, "%s\n", valstr[i]);
             }
             freestrtable(valstr, icount);
         }
-        H5Gclose(project);
         H5Gclose(chr);
         H5Dclose(dataset);
         H5Sclose(dataspace);
     }
     else
     {
-        H5Gclose(project);
-        printout("Invalid table name '%s'\n");
-        return 0;
+        return -1;
     }
-
     return 1;
 }
 
@@ -3805,7 +4026,7 @@ int mount()
         }
         if (read_chrinfo(project, -1, -1, 1, 1, order) < 0)
         {
-            printf(prtbuf, "Error reading project no %d name '%s' chromosomes \n", n, buf);
+            sprintf(prtbuf, "Error reading project no %d chromosomes \n", n);
             printout(prtbuf);
             H5Gclose(project);
             H5Fclose(newfile);
@@ -3913,7 +4134,7 @@ int delproject(int n)
     chrinfo_type *chrinfo1;
 
     //clean up projects
-    nn=1;
+    nn = 1;
     if (nprojects - nn > 1)
     {
         nprojects1 = nprojects - nn;
@@ -4233,6 +4454,7 @@ int useradd()
     accesstable[nusers - 1] = NULL;
     write_root_props('U', 0);
     write_root_props('A', 0);
+    fprintf(outs, "%d\n", nusers);
 
     return 1;
 }
@@ -4314,8 +4536,13 @@ int userpass()
     int usr = check_user_pass(name, pass);
     if (usr == -1)
     {
-        printout("invalid current password\n");
-        return 0;
+        //check if it is admin pass
+        if (check_pass(pass) == 0)
+        {
+            printout("invalid current password\n");
+            return 0;
+        }   
+        usr = get_user(name);
     }
 
     set_user_pass(usr, newpass);
@@ -4398,7 +4625,7 @@ int pinfo()
 
     if (read_str_attr(project, "type", buf) < 0)
     {
-        printout("cannot read attribute 'type'\n");
+        fprintf(outs, "cannot read attribute 'type'\n");
     }
     else
     {
@@ -4406,7 +4633,7 @@ int pinfo()
     }
     if (read_str_attr(project, "version", buf) < 0)
     {
-        printout("cannot read attribute 'version'\n");
+        fprintf(outs, "cannot read attribute 'version'\n");
     }
     else
     {
@@ -4414,7 +4641,7 @@ int pinfo()
     }
     if (read_str_attr(project, "genomeversion", buf) < 0)
     {
-        printout("cannot read attribute 'genomeversion'\n");
+        fprintf(outs, "cannot read attribute 'genomeversion'\n");
     }
     else
     {
@@ -4422,7 +4649,7 @@ int pinfo()
     }
     if (read_str_attr(project, "orientation", buf) < 0)
     {
-        printout("cannot read attribute 'orientation'\n");
+        fprintf(outs, "cannot read attribute 'orientation'\n");
     }
     else
     {
@@ -4433,7 +4660,7 @@ int pinfo()
     }
     if (read_int_attr(project, "status", &i) < 0)
     {
-        printout("cannot read attribute 'status'\n");
+        fprintf(outs, "cannot read attribute 'status'\n");
     }
     else
     {
@@ -4441,7 +4668,7 @@ int pinfo()
     }
     if (read_str_attr(project, "coordinate_system", buf) < 0)
     {
-        printout("cannot read attribute 'coordinate_system'\n");
+        fprintf(outs, "cannot read attribute 'coordinate_system'\n");
     }
     else
     {
@@ -4449,7 +4676,7 @@ int pinfo()
     }
     if (read_str_attr(project, "encoding", buf) < 0)
     {
-        printout("cannot read attribute 'encoding'\n");
+        fprintf(outs, "cannot read attribute 'encoding'\n");
     }
     else
     {
@@ -4458,7 +4685,7 @@ int pinfo()
     dataset = H5Dopen(project, "taxa", H5P_DEFAULT);
     if (dataset < 0)
     {
-        printout("=\tCannot open dataset taxa\n");
+        fprintf(outs, "=\tCannot open dataset taxa\n");
     }
     else
     {
@@ -4499,7 +4726,7 @@ int pinfo()
             if (dataset < 0)
             {
                 sprintf(prtbuf, "=\tCannot open dataset '%s'\n", buf);
-                printout(prtbuf);
+                fprintf(outs, prtbuf);
             }
             else
             {
@@ -4517,7 +4744,7 @@ int pinfo()
             if (dataset < 0)
             {
                 sprintf(prtbuf, "=\tCannot open dataset '%s'\n", buf);
-                printout(prtbuf);
+                fprintf(outs, prtbuf);
             }
             else
             {
@@ -4531,7 +4758,7 @@ int pinfo()
         dataset = H5Dopen(chromosome, "positions", H5P_DEFAULT);
         if (dataset < 0)
         {
-            printout("=\tCannot open dataset 'positions'\n");
+            fprintf(outs, "=\tCannot open dataset 'positions'\n");
         }
         else
         {
@@ -4541,13 +4768,28 @@ int pinfo()
             H5Sclose(filespace);
             H5Dclose(dataset);
         }
-        dataset = H5Dopen(chromosome, "markers", H5P_DEFAULT);
+
+        dataset = H5Dopen(chromosome, "alleles", H5P_DEFAULT);
         if (dataset < 0)
         {
-            printout("=\tCannot open dataset 'markers'\n");
+            fprintf(outs, "=\tCannot open dataset 'alleles'\n");
         }
         else
         {
+            filespace = H5Dget_space(dataset);
+            ret = H5Sget_simple_extent_dims(filespace, dims, NULL);
+            fprintf(outs, "=\talleles\t%lli\n", dims[0]);
+            H5Sclose(filespace);
+            H5Dclose(dataset);
+        }
+
+        if (!H5Lexists(chromosome, "markers", H5P_DEFAULT))
+        {
+            fprintf(outs, "=\tDataset 'markers' not present\n");
+        }
+        else
+        {
+            dataset = H5Dopen(chromosome, "markers", H5P_DEFAULT);
             filespace = H5Dget_space(dataset);
             ret = H5Sget_simple_extent_dims(filespace, dims, NULL);
             fprintf(outs, "=\tmarkers\t%lli\t", dims[0]);
@@ -4608,6 +4850,37 @@ int flist()
     return 1;
 }
 
+int login()
+{
+    char buf[1001], name[256], pass[100];
+
+    if (readline(name, 255, __LINE__, 1) < 0)return -1;
+    if (readline(pass, 100, __LINE__, 0) < 0)return -1;
+    if (readline(buf, 256, __LINE__, 0) != -1)
+    {
+        printout("invalid input, expected end-of-command here\n");
+        return -1;
+    }
+    int usr = check_user_pass(name, pass);
+    if(usr == -1)
+    {
+        if (check_pass(pass) != 0 && strcmp(name, "serveradmin")==0)
+        {
+            printout("OK\n");
+        }
+        else
+        {
+            printout("ERR\n");
+        }
+    }
+    else
+    {
+        printout("OK\n");
+        printout(&accesstable[usr][1]);
+    }
+    return 1;
+}
+
 int aflist()
 {
     int i;
@@ -4620,7 +4893,7 @@ int aflist()
         printout("invalid input, expected end-of-command here\n");
         return -1;
     }
-    
+
     if (check_pass(pass) == 0)
     {
         printout("invalid password\n");
@@ -4628,9 +4901,9 @@ int aflist()
     }
 
     sprintf(prtbuf, "ls %s/data > %s/ooo", hdf5conf, tmpdir);
-    i=system(prtbuf);
+    i = system(prtbuf);
     sprintf(prtbuf, "%s/ooo", tmpdir);
-    if((in=fopen(prtbuf, "r")) == NULL)
+    if ((in = fopen(prtbuf, "r")) == NULL)
     {
         printout("cannot list files\n");
         return 0;
@@ -4638,7 +4911,7 @@ int aflist()
     while (fgets(prtbuf, 4999, in))
     {
         chomp(prtbuf);
-        if(strcmp(prtbuf, "hdf5serverroot.h5")!=0 && strcmp(prtbuf, "hdf5pipe_out")!=0 && strcmp(prtbuf, "hdf5pipe_in")!=0 && strcmp(prtbuf, "hdf5.lock")!=0)
+        if (strcmp(prtbuf, "hdf5serverroot.h5") != 0 && strcmp(prtbuf, "hdf5pipe_out") != 0 && strcmp(prtbuf, "hdf5pipe_in") != 0 && strcmp(prtbuf, "hdf5.lock") != 0)
         {
             sprintf(buf, "%s\n", prtbuf);
             printout(buf);
@@ -4646,11 +4919,47 @@ int aflist()
         //sprintf(buf, "*%s*\n", prtbuf);
         //printout(buf);
     }
-    
+
     fclose(in);
     sprintf(prtbuf, "rm -f %s/ooo", tmpdir);
-    i=system(prtbuf);
+    i = system(prtbuf);
     fflush(outs);
+    return 1;
+}
+
+int ulist()
+{
+    int i;
+    char buf[257], pass[100];
+
+    if (readline(pass, 100, __LINE__, 0) < 0)return -1;
+    if (readline(buf, 256, __LINE__, 0) != -1)
+    {
+        printout("invalid input, expected end-of-command here\n");
+        return -1;
+    }
+
+    if (check_pass(pass) == 0)
+    {
+        printout("invalid password\n");
+        return 0;
+    }
+
+    if (nusers == 0)return 1;
+    for (i = 0; i < nusers; i++)
+    {
+        sprintf(prtbuf, "USER %s %s\n", users[i].username, users[i].password);
+        printout(prtbuf);
+        if (accesstable[i] == NULL)
+        {
+            //do nothing, no access to projects
+        }
+        else
+        {
+            printout(&accesstable[i][1]);
+        }
+    }
+
     return 1;
 }
 
