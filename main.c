@@ -1864,8 +1864,8 @@ int binsearch_str(hid_t obj, char *tblname, char *value, long unsigned int *pp)
     }
 
     *pp = (long unsigned int) jj;
-    fprintf(flog, "== binsearch_str INDEX %u iter %d\n", jj, nn);
-    fflush(flog);
+    //fprintf(flog, "== binsearch_str INDEX %u iter %d\n", jj, nn);
+    //fflush(flog);
     H5Dclose(dataset);
     H5Sclose(dataspace);
     return 1;
@@ -2633,6 +2633,7 @@ int query()
             int ntt = tt[1] - tt[0] + 1;
             int npps = npp / pstride;
             int ntts = ntt / tstride;
+            long unsigned int memory = (long unsigned int)npps * (long unsigned int)ntts * (long unsigned int)projects[prj].enc * sizeof (char);
             if (npps * pstride != npp)npps++;
             if (ntts * tstride != ntt)ntts++;
             fprintf(outf, "positions size = %d\n", npps);
@@ -2640,10 +2641,10 @@ int query()
 
             if (nodata == 0)
             {
-                data = malloc(npps * ntts * projects[prj].enc * sizeof (char));
+                data = malloc(memory);
                 if (data == NULL)
                 {
-                    sprintf(buf, "Cannot allocate %li bytes of memory [range-range]\n", ntt * npp * projects[prj].enc * sizeof (char));
+                    sprintf(buf, "Cannot allocate %lu bytes of memory [range-range]\n", memory);
                     printout(buf);
                     free(pp);
                     free(tt);
@@ -2678,13 +2679,15 @@ int query()
             int ntt = 1;
             fprintf(outf, "positions size = %i\n", npps);
             fprintf(outf, "taxa size = %li\n", nt);
+            
+            long unsigned int memory = (long unsigned int)npps * (long unsigned int)nt * (long unsigned int)projects[prj].enc * sizeof (char);
 
             if (nodata == 0)
             {
-                data = malloc(npps * nt * projects[prj].enc * sizeof (char));
+                data = malloc(memory);
                 if (data == NULL)
                 {
-                    sprintf(buf, "Cannot allocate %li bytes of memory [range-list]\n", ntt * npp * projects[prj].enc * sizeof (char));
+                    sprintf(buf, "Cannot allocate %lu bytes of memory [range-list]\n", memory);
                     printout(buf);
                     H5Gclose(project);
                     H5Gclose(chromosome);
@@ -2731,13 +2734,15 @@ int query()
             if (ntts * tstride != ntt)ntts++;
             fprintf(outf, "positions size = %li\n", np);
             fprintf(outf, "taxa size = %i\n", ntts);
+            
+            long unsigned int memory = (long unsigned int)np * (long unsigned int)ntts * (long unsigned int)projects[prj].enc * sizeof (char);
 
             if (nodata == 0)
             {
-                data = malloc(np * ntts * projects[prj].enc * sizeof (char));
+                data = malloc(memory);
                 if (data == NULL)
                 {
-                    sprintf(buf, "Cannot allocate %li bytes of memory [list-range]\n", npp * ntt * projects[prj].enc * sizeof (char));
+                    sprintf(buf, "Cannot allocate %lu bytes of memory [list-range]\n", memory);
                     printout(buf);
                     H5Gclose(project);
                     H5Gclose(chromosome);
@@ -2796,10 +2801,10 @@ int query()
 
             if (nodata == 0)
             {
-                data = malloc(projects[prj].enc * sizeof (char));
+                data = malloc((long unsigned int)projects[prj].enc * sizeof (char));
                 if (data == NULL)
                 {
-                    sprintf(buf, "Cannot allocate %li bytes of memory [list-list]\n", projects[prj].enc * sizeof (char));
+                    sprintf(buf, "Cannot allocate %lu bytes of memory [list-list]\n", (long unsigned int)projects[prj].enc * sizeof (char));
                     printout(buf);
                     H5Gclose(project);
                     H5Gclose(chromosome);
@@ -3623,11 +3628,11 @@ int sort()
 
 int table()
 {
-    char buf[1001], name[256], projectname[100], chrname[100], username[50], userpass[50];
-    hid_t project;
+    char buf[1001], name[256], projectname[100], chrname[100], username[50], userpass[50], postype[100], indx0[100], indx1[100];
+    hid_t project, chromosome;
     unsigned int n0, n1;
     char buf1[257];
-    int uid = -1, prj;
+    int uid = -1, prj, i, chr;
 
     if (readline(username, 50, __LINE__, 1) < 0)return -1;
     if (readline(userpass, 50, __LINE__, 0) < 0)return -1;
@@ -3660,17 +3665,25 @@ int table()
         }
     }
     chomp(chrname);
-    if (readline(buf, 255, __LINE__, 1) < 0)return -1;
-    n0 = strtol(buf, NULL, 0);
-    if (n0 == 0 && strcmp(buf, "0") != 0)
+    strcpy(postype, "index");
+    if (readline(postype, 100, __LINE__, -1) < 0)
+    {
+        if (strcmp(name, "positions") != 0)
+        {
+            return -1;
+        }
+    }
+    if (readline(indx0, 100, __LINE__, 1) < 0)return -1;
+    n0 = strtol(indx0, NULL, 0);
+    if (n0 == 0 && strcmp(indx0, "0") != 0)
     {
         gotoend();
         printout("Invalid starting index\n");
         return -1;
     }
-    if (readline(buf, 255, __LINE__, 1) < 0)return -1;
-    n1 = strtol(buf, NULL, 0);
-    if ((n1 == 0 && strcmp(buf, "0") != 0) || n1 < n0)
+    if (readline(indx1, 100, __LINE__, 1) < 0)return -1;
+    n1 = strtol(indx1, NULL, 0);
+    if ((n1 == 0 && strcmp(indx1, "0") != 0) || n1 < n0)
     {
         gotoend();
         printout("Invalid ending index\n");
@@ -3714,7 +3727,40 @@ int table()
         return 0;
     }
 
+    if (strcmp(name, "positions") == 0 && strcmp(postype, "value") == 0)
+    {
+        chr = find_chr(chrname, prj);
+        if (chr < 0)
+        {
+            printout("Invalid chromosome name\n");
+            return 0;
+        }
+        sprintf(buf, "chr%d", chrinfo[chr].num);
+        chromosome = H5Gopen(project, buf, H5P_DEFAULT);
+        if (chromosome < 0)
+        {
+            printout("Cannot open chromosome\n");
+            H5Gclose(project);
+            return 0;
+        }
+        long unsigned int pp[2];
+        for (i = 0; i < 2; i++)
+        {
+            if (convert_position(buf, chromosome, pp, i, "positions", "range") < 0)
+            {
+                printout("cannot convert position to index\n");
+                H5Gclose(project);
+                H5Gclose(chromosome);
+                return 0;
+            }
+        }
+        H5Gclose(chromosome);
+        n0 = (unsigned int) pp[0];
+        n1 = (unsigned int) pp[1];
+    }
 
+    fprintf(outs, "%d\n", n0);
+    fprintf(outs, "%d\n", n1);
     int retcode = printtable(name, chrname, project, n0, n1, prj, 1, outs);
 
     if (retcode == -1)
@@ -3904,7 +3950,7 @@ int mount()
 {
     char buf[1001], name[256], pass[100];
     hid_t newfile, attr, project, type;
-    int n = 0, i, nn, order = -1;
+    int n = 0, i, j, ntsts, nn, order = -1, newmnt = 0;
     char buf1[257], orderstr[20];
 
     if (readline(pass, 100, __LINE__, 0) < 0)return -1;
@@ -4050,6 +4096,21 @@ int mount()
     //add file
     if (nfiles > 0)
     {
+        newmnt = -1;
+        for (i = 0; i < nfiles; i++)
+        {
+            ntsts = -1;
+            for (j = 0; j < nfiles; j++)
+            {
+                if (files[j].mnt == i)ntsts = 1;
+            }
+            if (ntsts == -1)
+            {
+                newmnt = i;
+                break;
+            }
+        }
+        if (newmnt == -1)newmnt = nfiles;
         nfiles++;
         files = realloc(files, nfiles * sizeof (files_type));
         filesh = realloc(filesh, nfiles * sizeof (hid_t));
@@ -4057,9 +4118,10 @@ int mount()
     else
     {
         nfiles = 1;
+        newmnt = 0;
     }
     strcpy(files[nfiles - 1].name, name);
-    files[nfiles - 1].mnt = nfiles - 1;
+    files[nfiles - 1].mnt = newmnt;
     filesh[nfiles - 1] = newfile;
 
     fprintf(flog, "Adding projects\n");
@@ -4083,7 +4145,7 @@ int mount()
         type = H5Tcopy(H5T_C_S1);
         H5Tset_size(type, 256);
         H5Aread(attr, type, buf);
-        projects[nn + i].mnt = nfiles - 1;
+        projects[nn + i].mnt = newmnt;
         projects[nn + i].num = i;
         strcpy(projects[nn + i].name, buf);
         read_str_attr(project, "encoding", buf);
@@ -4102,7 +4164,7 @@ int mount()
         {
             order = 3;
         }
-        projects[nn + i].order = read_chrinfo(project, nfiles - 1, nn + i, 0, 0, order);
+        projects[nn + i].order = read_chrinfo(project, newmnt, nn + i, 0, 0, order);
         H5Gclose(project);
         H5Aclose(attr);
     }
@@ -4341,7 +4403,19 @@ int umount()
             if (i != n)
             {
                 memcpy(&files1[j], &files[i], sizeof (files_type));
+                files1[j].mnt = j;
                 filesh1[j] = filesh[i];
+                if (i > n)
+                {
+                    sprintf(buf, "/mnt%d", i);
+                    H5Funmount(file, buf);
+                    sprintf(buf, "/mnt%d", j);
+                    if (H5Fmount(file, buf, filesh1[j], H5P_DEFAULT) < 0)
+                    {
+                        sprintf(prtbuf, "Cannot mount file %s on group %s", name, buf);
+                        error(prtbuf, __LINE__);
+                    }
+                }
                 j++;
             }
         }
@@ -4361,7 +4435,7 @@ int umount()
     nn = 0;
     for (i = 0; i < nprojects; i++)
         if (projects[i].mnt == n)nn++;
-    if (nprojects - nn > 1)
+    if (nprojects - nn >= 1)
     {
         nprojects1 = nprojects - nn;
         projects1 = (projects_type *) malloc(nprojects1 * sizeof (projects_type));
@@ -4371,6 +4445,7 @@ int umount()
             if (projects[i].mnt != n)
             {
                 memcpy(&projects1[j], &projects[i], sizeof (projects_type));
+                if (projects[i].mnt > n)projects1[j].mnt = projects[i].mnt - 1;
                 j++;
             }
         }
@@ -4390,7 +4465,7 @@ int umount()
     nn = 0;
     for (i = 0; i < nchrinfo; i++)
         if (chrinfo[i].mnt == n)nn++;
-    if (nprojects - nn > 1)
+    if (nchrinfo - nn >= 1)
     {
         nchrinfo1 = nchrinfo - nn;
         chrinfo1 = (chrinfo_type *) malloc(nchrinfo1 * sizeof (chrinfo_type));
@@ -4400,6 +4475,7 @@ int umount()
             if (chrinfo[i].mnt != n)
             {
                 memcpy(&chrinfo1[j], &chrinfo[i], sizeof (chrinfo_type));
+                if (chrinfo[i].mnt > n)chrinfo1[j].mnt = chrinfo[i].mnt - 1;
                 j++;
             }
         }
@@ -4541,7 +4617,7 @@ int userpass()
         {
             printout("invalid current password\n");
             return 0;
-        }   
+        }
         usr = get_user(name);
     }
 
@@ -4862,9 +4938,9 @@ int login()
         return -1;
     }
     int usr = check_user_pass(name, pass);
-    if(usr == -1)
+    if (usr == -1)
     {
-        if (check_pass(pass) != 0 && strcmp(name, "serveradmin")==0)
+        if (check_pass(pass) != 0 && strcmp(name, "serveradmin") == 0)
         {
             printout("OK\n");
         }
