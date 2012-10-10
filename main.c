@@ -50,6 +50,7 @@ typedef struct
 typedef struct
 {
     char name[256];
+    char desc[5001];
     int num;
     int mnt;
     int order; //1 - positions fast dim, 2 - taxa fast dim, 3 - both present
@@ -65,7 +66,8 @@ typedef struct
 
 typedef struct
 {
-    char name[11];
+    char name[51];
+    char length[11];
     int mnt;
     int prj;
     int num;
@@ -285,6 +287,8 @@ int read_str_attr(hid_t project, char *attr_name, char *attr_value)
     herr_t ret, ret1;
     H5A_info_t ainfo;
 
+    //fprintf(flog, "read_str_attr name '%s'\n", attr_name);
+    fflush(flog);
     if (!H5Aexists(project, attr_name))return -1;
     attr = H5Aopen_name(project, attr_name);
     H5Aget_info(attr, &ainfo);
@@ -294,6 +298,8 @@ int read_str_attr(hid_t project, char *attr_name, char *attr_value)
     attr_value[ainfo.data_size] = '\0';
     ret1 = H5Aclose(attr);
     ret1 = H5Tclose(atype);
+    //fprintf(flog, "read_str_attr value '%s' %d\n", attr_value, ret);
+    fflush(flog);
     if (ret < 0)return -1;
     return 1;
 }
@@ -487,6 +493,14 @@ int read_chrinfo(hid_t project, int mnt, int prj, int test, int prt, int order)
         else
         {
             sprintf(chrinfo[nchrinfo + i].name, "%s", buf);
+        }
+        if (read_str_attr(chromosome, "length", buf) < 0)
+        {
+            sprintf(chrinfo[nchrinfo + i].length, " ");
+        }
+        else
+        {
+            sprintf(chrinfo[nchrinfo + i].length, "%s", buf);
         }
         if (order == 1 || order == 3)
         {
@@ -720,6 +734,7 @@ void create_projects()
     projects[0].order = -1;
     projects[0].enc = -1;
     memset(projects[0].name, '\0', 256);
+    memset(projects[0].desc, '\0', 5001);
     tmpprar[0] = projects[0];
     status = H5Dwrite(dataset, datatype, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmpprar);
     if (status < 0)error("Cannot write dataset", __LINE__);
@@ -2633,7 +2648,7 @@ int query()
             int ntt = tt[1] - tt[0] + 1;
             int npps = npp / pstride;
             int ntts = ntt / tstride;
-            long unsigned int memory = (long unsigned int)npps * (long unsigned int)ntts * (long unsigned int)projects[prj].enc * sizeof (char);
+            long unsigned int memory = (long unsigned int) npps * (long unsigned int) ntts * (long unsigned int) projects[prj].enc * sizeof (char);
             if (npps * pstride != npp)npps++;
             if (ntts * tstride != ntt)ntts++;
             fprintf(outf, "positions size = %d\n", npps);
@@ -2679,8 +2694,8 @@ int query()
             int ntt = 1;
             fprintf(outf, "positions size = %i\n", npps);
             fprintf(outf, "taxa size = %li\n", nt);
-            
-            long unsigned int memory = (long unsigned int)npps * (long unsigned int)nt * (long unsigned int)projects[prj].enc * sizeof (char);
+
+            long unsigned int memory = (long unsigned int) npps * (long unsigned int) nt * (long unsigned int) projects[prj].enc * sizeof (char);
 
             if (nodata == 0)
             {
@@ -2734,8 +2749,8 @@ int query()
             if (ntts * tstride != ntt)ntts++;
             fprintf(outf, "positions size = %li\n", np);
             fprintf(outf, "taxa size = %i\n", ntts);
-            
-            long unsigned int memory = (long unsigned int)np * (long unsigned int)ntts * (long unsigned int)projects[prj].enc * sizeof (char);
+
+            long unsigned int memory = (long unsigned int) np * (long unsigned int) ntts * (long unsigned int) projects[prj].enc * sizeof (char);
 
             if (nodata == 0)
             {
@@ -2801,10 +2816,10 @@ int query()
 
             if (nodata == 0)
             {
-                data = malloc((long unsigned int)projects[prj].enc * sizeof (char));
+                data = malloc((long unsigned int) projects[prj].enc * sizeof (char));
                 if (data == NULL)
                 {
-                    sprintf(buf, "Cannot allocate %lu bytes of memory [list-list]\n", (long unsigned int)projects[prj].enc * sizeof (char));
+                    sprintf(buf, "Cannot allocate %lu bytes of memory [list-list]\n", (long unsigned int) projects[prj].enc * sizeof (char));
                     printout(buf);
                     H5Gclose(project);
                     H5Gclose(chromosome);
@@ -2905,12 +2920,12 @@ int cache()
         if (projects[i].order == 1)strcpy(ordr, "pf");
         if (projects[i].order == 2)strcpy(ordr, "tf");
         if (projects[i].order == 3)strcpy(ordr, "both");
-        fprintf(outs, "/mnt%d/project%d\t%s\tenc_size=%dB\torientation=%s\n", projects[i].mnt, projects[i].num, projects[i].name, projects[i].enc, ordr);
+        fprintf(outs, "/mnt%d/project%d\t%s\tenc_size=%dB\torientation=%s\tdescription=%s\n", projects[i].mnt, projects[i].num, projects[i].name, projects[i].enc, ordr, projects[i].desc);
     }
     fprintf(outs, "%d chromosomes\n", nchrinfo);
     for (i = 0; i < nchrinfo; i++)
     {
-        fprintf(outs, "/mnt%d/project%d/chr%d\t%s\tproject_indx=%d\tpos_dim=%lu\ttaxa_dim=%lu\n", chrinfo[i].mnt, projects[chrinfo[i].prj].num, chrinfo[i].num, chrinfo[i].name, chrinfo[i].prj, (long unsigned int) chrinfo[i].dim0, (long unsigned int) chrinfo[i].dim1);
+        fprintf(outs, "/mnt%d/project%d/chr%d\t%s\tproject_indx=%d\tpos_dim=%lu\ttaxa_dim=%lu\tlength=%s\n", chrinfo[i].mnt, projects[chrinfo[i].prj].num, chrinfo[i].num, chrinfo[i].name, chrinfo[i].prj, (long unsigned int) chrinfo[i].dim0, (long unsigned int) chrinfo[i].dim1, chrinfo[i].length);
     }
     fflush(outs);
     return 1;
@@ -4148,6 +4163,14 @@ int mount()
         projects[nn + i].mnt = newmnt;
         projects[nn + i].num = i;
         strcpy(projects[nn + i].name, buf);
+        if (read_str_attr(project, "desc", buf) < 0)
+        {
+            strcpy(projects[nn + i].desc, "(none)");
+        }
+        else
+        {
+            strcpy(projects[nn + i].desc, buf);
+        }
         read_str_attr(project, "encoding", buf);
         projects[nn + i].enc = get_enc_size(buf);
         strcpy(projects[nn + i].encoding, buf);
@@ -4676,6 +4699,7 @@ int pinfo()
     int i, n, order = 0;
     hsize_t dims[2];
     char buf[1000];
+    char clen[20];
     char buf1[257];
     hid_t project, chromosome, dataset, filespace;
     herr_t ret;
@@ -4758,6 +4782,14 @@ int pinfo()
     {
         fprintf(outs, "encoding\t%s\n", buf);
     }
+    if (read_str_attr(project, "desc", buf) < 0)
+    {
+        fprintf(outs, "cannot read attribute 'desc'\n");
+    }
+    else
+    {
+        fprintf(outs, "desc\t%s\n", buf);
+    }
     dataset = H5Dopen(project, "taxa", H5P_DEFAULT);
     if (dataset < 0)
     {
@@ -4787,13 +4819,21 @@ int pinfo()
         sprintf(buf, "chr%d", i);
         if (!H5Lexists(project, buf, H5P_DEFAULT))break;
         chromosome = H5Gopen(project, buf, H5P_DEFAULT);
-        if (read_str_attr(chromosome, "name", buf) < 0)
+        if (read_str_attr(chromosome, "length", buf) < 0)
         {
-            fprintf(outs, "chromosome\t%d\tchr%d\n", i, i);
+            strcpy(clen, "UNK");
         }
         else
         {
-            fprintf(outs, "chromosome\t%d\t%s\n", i, buf);
+            strcpy(clen, buf);
+        }
+        if (read_str_attr(chromosome, "name", buf) < 0)
+        {
+            fprintf(outs, "chromosome\t%d\tchr%d\tlen=%s\n", i, i, clen);
+        }
+        else
+        {
+            fprintf(outs, "chromosome\t%d\t%s\tlen=%s\n", i, buf, clen);
         }
         if (order == 1 || order == 3)
         {
@@ -4900,7 +4940,7 @@ int plist()
     fprintf(outs, "%d projects attached\n", nprojects);
     for (i = 0; i < nprojects; i++)
     {
-        fprintf(outs, "/mnt%d/project%d\t%s\n", projects[i].mnt, projects[i].num, projects[i].name);
+        fprintf(outs, "/mnt%d/project%d\t%s\t%s\n", projects[i].mnt, projects[i].num, projects[i].name, projects[i].desc);
     }
     fflush(outs);
     return 1;
